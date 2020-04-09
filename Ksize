@@ -1,0 +1,272 @@
+#!/bin/bash
+
+# Ksize version 1.0
+# Author: Katrovisch
+# About: Simple script to monitor disk size, files or directories.
+
+LINUX=$(awk -F "=" '/^NAME=/ {print $2}' /etc/os-release | sed 's/^"\(.*\)".*/\1/')
+VERSION=$(awk -F "=" '/^VERSION=/ {print $2}' /etc/os-release | sed 's/^"\(.*\)".*/\1/')
+MACHINE=$(hostname)
+IP=$(hostname -I)
+DATE=$(date +"%D %T")
+
+if ! which curl &> /dev/null; then
+    echo "[x] Required dependencies: curl not installed"; exit 1;
+fi
+
+usage() {
+    echo -e "Usage:\n\n\
+    -d, --device       Devices
+    -p, --path         PATH or File
+    --max-device       Maximum size for the device: (1-100%) or (100K, 10M, 1G)
+    --max-path         Maximum size for the path: (100K, 10M, 1G)
+    --mail-rcpt        Receiving E-mail
+    -s, --subject      Subject
+    -v, --version      Version
+    --help             Help"
+}
+
+version() {
+    echo "Ksize 1.0"
+}
+
+ksizerc() {
+
+if [ -f ~/.ksizerc ]; then
+source ~/.ksizerc
+
+if [ -z "$SMTP_URL" ]; then SMTP_URL_FLAG=1; echo "Set variable SMTP_URL in ~/.ksizerc"; fi
+if [ -z "$SMTP_PORT" ]; then SMTP_PORT_FLAG=1; echo "Set variable SMTP_PORT in ~/.ksizerc"; fi
+if [ -z "$MAIL_FROM" ]; then MAIL_FROM_FLAG=1; echo "Set variable MAIL_FROM in ~/.ksizerc"; fi
+if [ -z "$MAIL_PASS" ]; then MAIL_PASS_FLAG=1; echo "Set variable MAIL_PASS in ~/.ksizerc"; fi
+
+if [ "$SMTP_URL_FLAG" = "1" ] || [ "$SMTP_PORT_FLAG" = "1" ] || [ "$MAIL_FROM_FLAG" = "1" ] || [ "$MAIL_PASS_FLAG" = "1" ]; then exit; fi
+
+else
+   echo "ERROR: File not found ~/.ksizerc"; exit ;
+fi
+}
+
+sendmail_device() {
+
+ksizerc
+
+cat << EOF > ~/.kmail
+From: "$REALNAME" <$MAIL_FROM>
+To: <$MAIL_RCPT>
+Subject: $SUBJECT
+
+INFO:
+| IP: $IP
+| $DATE
+| User: $USER
+| System: $LINUX $VERSION
+| Host: $MACHINE
+
+REPORT:
+| Device: $DEVICE
+| Size used (%): $SIZE_DEVICE_PORCENTAGE%
+| Size used: ${SIZE_DEVICE_USED}G
+| Size avail: $AVAIL
+| File System: $FSTYPE
+| Mounted: $MOUNTED
+EOF
+
+curl_smtp
+
+}
+
+sendmail_path() {
+
+ksizerc
+
+cat << EOF > ~/.kmail
+From: "$REALNAME" <$MAIL_FROM>
+To: <$MAIL_RCPT>
+Subject: $SUBJECT
+
+INFO:
+| IP: $IP
+| $DATE
+| User: $USER
+| System: $LINUX $VERSION
+| Host: $MACHINE
+
+REPORT:
+| PATH: $PATH_FILE
+| Size used: $MAIL_SIZE_PATH
+EOF
+
+curl_smtp
+
+}
+
+curl_smtp(){
+
+curl --url "smtps://$SMTP_URL:$SMTP_PORT" \
+--mail-rcpt "$MAIL_RCPT" \
+--upload-file ~/.kmail \
+--user "$MAIL_FROM:$MAIL_PASS" &> /dev/null
+
+}
+
+if [ "$#" -lt "1" ];then usage; exit; fi
+
+OPT=`getopt -o hvd:p:s: --long device:,path:,max-device:,max-path:,mail-rcpt:,subject:,help,version -- "$@"`
+
+if [ $? -eq 1 ]; then exit; fi
+
+eval set -- "$OPT"
+
+while true ; do
+    case "$1" in
+        -h|--help) usage; exit ;;
+        -v|--version) version; exit ;;
+        -d|--device)
+            DEVICE=$2 ; shift 2 ;;
+        -p|--path)
+            PATH_FILE=$2 ; shift 2 ;;
+        --max-device)
+            MAX_DEVICE=$2 ; shift 2 ;;
+        --max-path)
+            MAX_PATH=$2 ; shift 2 ;;
+        --mail-rcpt)
+            MAIL_RCPT=$2 ; shift 2 ;;
+        -s|--subject)
+            SUBJECT=$2 ; shift 2 ;;
+        --) shift ; break ;;
+        *) echo "Internal error!" ; exit 1 ;;
+    esac
+done
+
+if [ -n "$DEVICE" ] && [ -n "$MAX_DEVICE" ] && [ -n "$MAIL_RCPT" ]; then
+    if findmnt --source $DEVICE &> /dev/null; then
+
+            CHECK_ALPHA=$(echo $MAX_DEVICE | tr -d '[:digit:]')
+            CHECK_ALPHA=${#CHECK_ALPHA}
+
+            if [ $CHECK_ALPHA -eq 1 ]; then
+
+            SIZE_DEVICE_PORCENTAGE=$(df | grep "$DEVICE" | awk '{print $5}' | awk -F % '{print $1}')
+            AVAIL=$(df -h | grep "$DEVICE" | awk '{print $4}')
+            SIZE_DEVICE_USED=$(df -h | grep "$DEVICE" | awk '{print $3}')
+            MOUNTED=$(df | grep "$DEVICE" | awk '{print $6}')
+	    FSTYPE=$(df --print-type | grep "$DEVICE" | awk '{print $2}')
+
+                if [[ $MAX_DEVICE =~ [%] ]]; then
+                    MAX_PORCENTAGE_FLAG=1; MAX_DEVICE=$(echo "${MAX_DEVICE//%}")
+
+                elif [[ $MAX_DEVICE =~ [K] ]]
+                then
+                    MAX_DEVICE=$(echo "${MAX_DEVICE//K}")
+                    MAX=$[$MAX_DEVICE*1]
+
+                elif [[ $MAX_DEVICE =~ [M] ]]
+                then
+                    MAX_DEVICE=$(echo "${MAX_DEVICE//M}")
+                    MAX=$[$MAX_DEVICE*1000]
+
+                elif [[ $MAX_DEVICE =~ [G] ]]
+                then
+                    MAX_DEVICE=$(echo "${MAX_DEVICE//G}")
+                    MAX=$[$MAX_DEVICE*1000000]
+                else
+                    echo -e "Set the size unit (Ex: 100K, 10M, 1G), or porcetage (%)\nUnknown: '$MAX_DEVICE'"; exit;
+                fi
+            else
+              echo -e "Set the size unit (Ex: 100K, 10M, 1G), or porcetage (%)\nUnknown: '$MAX_DEVICE'"; exit;
+            fi
+
+            if [[ $SIZE_DEVICE_USED =~ [K] ]]
+            then
+                SIZE_DEVICE_USED=$(echo $SIZE_DEVICE_USED | awk -F K '{print $1}')
+                SIZE_CONVERT_DEVICE=$[$SIZE_DEVICE_USED*1]
+
+            elif [[ $SIZE_DEVICE_USED =~ [M] ]]
+            then
+                SIZE_DEVICE_USED=$(echo $SIZE_DEVICE_USED | awk -F M '{print $1}')
+                SIZE_CONVERT_DEVICE=$[$SIZE_DEVICE_USED*1000]
+
+            elif [[ $SIZE_DEVICE_USED =~ [G] ]]
+            then
+                SIZE_DEVICE_USED=$(echo $SIZE_DEVICE_USED | awk -F G '{print $1}')
+                SIZE_CONVERT_DEVICE=$[$SIZE_DEVICE_USED*1000000]
+            fi
+         else
+            echo "Device not found: '$DEVICE'"; exit
+        fi
+
+        if [ "$MAX_PORCENTAGE_FLAG" = "1" ]; then
+            if [ "$MAX_DEVICE" -ge 1 ] && [ "$MAX_DEVICE" -le 100 ]; then
+                if [ "$SIZE_DEVICE_PORCENTAGE" -ge $MAX_DEVICE ]; then
+                    sendmail_device
+                fi
+           else
+                echo "Choose a size percentage between 1 to 100"; exit;
+           fi
+        else
+           if [ "$SIZE_CONVERT_DEVICE" -ge "$MAX" ]; then
+                   sendmail_device
+           fi
+       fi
+elif [ -n "$PATH_FILE" ] && [ -n "$MAX_PATH" ] && [ -n "$MAIL_RCPT" ]; then
+   if [ -e "$PATH_FILE" ]; then
+
+        DU=$(du -sh $PATH_FILE 2>&1)
+        if [ $? = 1 ]; then
+            echo "ERROR: Permission denied"; exit;
+        else
+            MAIL_SIZE_PATH=$(echo "$DU" | awk '{print $1}')
+            SIZE_PATH_FILE=$(echo "$DU" | awk '{print $1}')
+        fi
+
+        if [[ $SIZE_PATH_FILE =~ [K] ]]
+        then
+            SIZE_PATH_FILE=$(echo "${SIZE_PATH_FILE//K}")
+            SIZE_CONVERT_PATH=$[$SIZE_PATH_FILE*1]
+
+        elif [[ $SIZE_PATH_FILE =~ [M] ]]
+        then
+            SIZE_PATH_FILE=$(echo "${SIZE_PATH_FILE//M}")
+            SIZE_CONVERT_PATH=$[$SIZE_PATH_FILE*1000]
+
+        elif [[ $SIZE_PATH_FILE =~ [G] ]]
+        then
+            SIZE_PATH_FILE=$(echo "${SIZE_PATH_FILE//G}")
+            SIZE_CONVERT_PATH=$[$SIZE_PATH_FILE*1000000]
+        fi
+
+        CHECK_ALPHA=$(echo $MAX_PATH | tr -d '[:digit:]')
+        CHECK_ALPHA=${#CHECK_ALPHA}
+
+        if [ ! $CHECK_ALPHA -eq 1 ]; then
+            echo -e "Set the size unit (Ex: 100K, 10M, 1G)\nUnknown: '$MAX_PATH'"; exit;
+        fi
+
+        if [[ $MAX_PATH =~ [K] ]]
+        then
+            MAX_PATH=$(echo "${SIZE_PATH_FILE//K}")
+            MAX=$[$MAX_PATH*1]
+
+        elif [[ $MAX_PATH =~ [M] ]]
+        then
+            MAX_PATH=$(echo "${SIZE_PATH_FILE//M}")
+            MAX=$[$MAX_PATH*1000]
+
+        elif [[ $MAX_PATH =~ [G] ]]
+        then
+            MAX_PATH=$(echo "${SIZE_PATH_FILE//G}")
+            MAX=$[$MAX_PATH*1000000]
+        else
+            echo -e "Set the size unit (Ex: 100K, 10M, 1G)\nUnknown: '$MAX_PATH'"; exit;
+        fi
+
+        if [ "$SIZE_CONVERT_PATH" -ge $MAX ]; then
+            sendmail_path
+        fi
+    else
+        echo "Path not found: $PATH_FILE"; exit
+    fi
+else
+    echo "Missing arguments"; exit 1;
+fi
