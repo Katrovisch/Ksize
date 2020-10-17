@@ -1,5 +1,5 @@
-# Ksize
-Simple script to monitor disk size, files or directories and notifies you by email.
+<h1 align="center">Ksize</h1>
+<h4 align="center"><code>Simple script to monitor disk size, files or directories and notifies you by email.</code></h4>
 
 - **Dependencies**
 ```
@@ -40,3 +40,7 @@ Add to cron:
 # m h  dom mon dow   command
   x x   x   x   x     Ksize --device <device> --max-device <size> --mail-rcpt <email-recept>
 ```
+
+- **License**
+
+Ksize is licensed under the [GNU General Public License v3.0](https://github.com/Katrovisch/Ksize/blob/master/LICENSE)
